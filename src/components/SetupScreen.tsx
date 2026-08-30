@@ -6,13 +6,17 @@ import type {
   SessionLength,
 } from '../domain/types'
 import { MAX_WHOLE, MIN_WHOLE, PRESET_SETTINGS } from '../domain/types'
+import type { VoicePreferences } from '../voice'
 import { AppHeader } from './AppHeader'
+import { VoiceSettingsPanel } from './VoiceSettingsPanel'
 
 interface SetupScreenProps {
   settings: PracticeSettings
+  voicePreferences: VoicePreferences
   historyCount: number
   error: string
   onSettingsChange: (settings: PracticeSettings) => void
+  onVoicePreferencesChange: (preferences: VoicePreferences) => void
   onStart: () => void
   onTutorial: () => void
   onProgress: () => void
@@ -69,9 +73,11 @@ function settingWithPreset(
 
 export function SetupScreen({
   settings,
+  voicePreferences,
   historyCount,
   error,
   onSettingsChange,
+  onVoicePreferencesChange,
   onStart,
   onTutorial,
   onProgress,
@@ -227,6 +233,11 @@ export function SetupScreen({
             </div>
           </section>
         )}
+
+        <VoiceSettingsPanel
+          preferences={voicePreferences}
+          onChange={onVoicePreferencesChange}
+        />
 
         <section className="settings-panel" aria-labelledby="session-heading">
           <div className="settings-row">

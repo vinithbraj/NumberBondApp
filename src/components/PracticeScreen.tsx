@@ -11,6 +11,14 @@ import type {
   PracticeSettings,
   SessionSummary,
 } from '../domain/types'
+import { useSpeechFeedback } from '../hooks/useSpeechFeedback'
+import type { VoicePreferences } from '../voice'
+import {
+  correctFeedbackFor,
+  incorrectFeedbackFor,
+  questionPromptFor,
+  revealedAnswerFeedbackFor,
+} from '../voice'
 import { AppHeader } from './AppHeader'
 import { DotHint } from './DotHint'
 import { Keypad } from './Keypad'
@@ -21,6 +29,7 @@ import {
 
 interface PracticeScreenProps {
   settings: PracticeSettings
+  voicePreferences: VoicePreferences
   onComplete: (summary: SessionSummary) => void
   onExit: () => void
 }
@@ -111,9 +120,16 @@ function ensureCompatibleBatch(
 }
 
 function promptFor(exercise: BondExercise): string {
-  return exercise.missing === 'whole'
-    ? 'What is the whole?'
-    : 'What is the missing part?'
+  if (exercise.missing === 'whole') {
+    return `What do ${exercise.parts[0]} and ${exercise.parts[1]} make?`
+  }
+  const knownPart =
+    exercise.missing === 'partA' ? exercise.parts[1] : exercise.parts[0]
+  return `The whole is ${exercise.whole}. One part is ${knownPart}. What part is missing?`
+}
+
+function promptKind(exercise: BondExercise): string {
+  return exercise.missing === 'whole' ? 'Find the whole' : 'Find the missing part'
 }
 
 function feedbackFor(state: PracticeState): string {
@@ -135,6 +151,7 @@ function sentenceValues(exercise: BondExercise, answer: string) {
 
 export function PracticeScreen({
   settings,
+  voicePreferences,
   onComplete,
   onExit,
 }: PracticeScreenProps) {
@@ -146,11 +163,19 @@ export function PracticeScreen({
   const inputRef = useRef<HTMLInputElement>(null)
   const nextButtonRef = useRef<HTMLButtonElement>(null)
   const exercise = state.queue[state.currentIndex]
+  const { isSupported: voiceSupported, speak, stop } =
+    useSpeechFeedback(voicePreferences)
 
   useEffect(() => {
     if (state.phase === 'answering') inputRef.current?.focus()
     else nextButtonRef.current?.focus()
   }, [state.currentIndex, state.phase])
+
+  useEffect(() => {
+    if (!exercise) return undefined
+    speak(questionPromptFor(exercise, state.currentIndex))
+    return stop
+  }, [exercise, speak, state.currentIndex, stop])
 
   if (!exercise) {
     return (
@@ -183,11 +208,13 @@ export function PracticeScreen({
     if (state.phase !== 'answering' || state.answer === '') return
     const numericAnswer = Number(state.answer)
     if (isCorrectAnswer(exercise, numericAnswer)) {
+      speak(correctFeedbackFor(exercise))
       dispatch({
         type: 'correct',
         answer: String(correctAnswer(exercise)),
       })
     } else {
+      speak(incorrectFeedbackFor(state.attempts + 1))
       dispatch({ type: 'wrong' })
       inputRef.current?.focus()
     }
@@ -203,6 +230,7 @@ export function PracticeScreen({
 
   const goNext = () => {
     if (state.phase === 'answering') return
+    stop()
     if (isLast) {
       onComplete(makeSummary())
       return
@@ -224,6 +252,7 @@ export function PracticeScreen({
 
   const endSession = () => {
     if (!window.confirm('End this practice session?')) return
+    stop()
     if (state.completed > 0) onComplete(makeSummary())
     else onExit()
   }
@@ -260,8 +289,20 @@ export function PracticeScreen({
             )}
           </div>
 
-          <p className="eyebrow">Number bond</p>
+          <p className="eyebrow">{promptKind(exercise)}</p>
           <h1 id="practice-prompt">{promptFor(exercise)}</h1>
+          {voicePreferences.enabled && voiceSupported && (
+            <button
+              className="listen-button"
+              type="button"
+              onClick={() =>
+                speak(questionPromptFor(exercise, state.currentIndex))
+              }
+            >
+              <span aria-hidden="true">▶</span>
+              Hear the question again
+            </button>
+          )}
 
           <NumberBondDiagram
             answer={state.answer}
@@ -297,12 +338,13 @@ export function PracticeScreen({
             <button
               className="text-button show-answer-button"
               type="button"
-              onClick={() =>
+              onClick={() => {
+                speak(revealedAnswerFeedbackFor(exercise))
                 dispatch({
                   type: 'reveal',
                   answer: String(correctAnswer(exercise)),
                 })
-              }
+              }}
             >
               Show answer
             </button>

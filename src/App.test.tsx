@@ -3,12 +3,14 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { PRESET_SETTINGS } from './domain/types'
+import { installSpeechSynthesisMock } from './test/speechSynthesisMock'
 import {
   addSessionSummary,
   loadSessionSummaries,
   saveSettings,
   setTutorialCompleted,
 } from './storage'
+import { loadVoicePreferences } from './voice'
 
 function answerFromSentence(): string {
   const sentence = screen.getByLabelText('Number sentence').textContent ?? ''
@@ -29,6 +31,8 @@ describe('App flow', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    Reflect.deleteProperty(window, 'speechSynthesis')
   })
 
   it('shows the tutorial once and makes it replayable', async () => {
@@ -108,5 +112,25 @@ describe('App flow', () => {
     await user.click(screen.getByRole('button', { name: 'Reset progress' }))
     expect(screen.getByRole('heading', { name: 'No sessions yet' })).toBeInTheDocument()
     expect(loadSessionSummaries()).toHaveLength(0)
+  })
+
+  it('persists the selected teacher tone and installed voice', async () => {
+    setTutorialCompleted(true)
+    installSpeechSynthesisMock()
+    const user = userEvent.setup()
+    render(<App />)
+
+    await screen.findByRole('option', { name: /Samantha/ })
+    await user.click(screen.getByRole('button', { name: /Cheerful/ }))
+    await user.selectOptions(
+      screen.getByLabelText('Choose a teacher voice'),
+      'voice:samantha',
+    )
+
+    expect(loadVoicePreferences()).toEqual({
+      enabled: true,
+      tone: 'cheerful',
+      voiceURI: 'voice:samantha',
+    })
   })
 })

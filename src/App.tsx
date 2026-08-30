@@ -13,11 +13,17 @@ import {
   saveSettings,
   setTutorialCompleted,
 } from './storage'
+import type { VoicePreferences } from './voice'
+import {
+  loadVoicePreferences,
+  saveVoicePreferences,
+} from './voice'
 
 type AppView = 'tutorial' | 'setup' | 'practice' | 'summary' | 'progress'
 
 export default function App() {
   const [initialState] = useState(loadAppState)
+  const [initialVoicePreferences] = useState(loadVoicePreferences)
   const [settings, setSettings] = useState<PracticeSettings>(
     initialState.settings,
   )
@@ -34,6 +40,10 @@ export default function App() {
   const [lastSummary, setLastSummary] = useState<SessionSummary | null>(null)
   const [sessionKey, setSessionKey] = useState(0)
   const [setupError, setSetupError] = useState('')
+  const [voicePreferences, setVoicePreferences] =
+    useState<VoicePreferences>(initialVoicePreferences)
+  const [sessionVoicePreferences, setSessionVoicePreferences] =
+    useState<VoicePreferences>(initialVoicePreferences)
 
   const updateSettings = (next: PracticeSettings) => {
     setSettings(next)
@@ -47,6 +57,11 @@ export default function App() {
     setView('setup')
   }
 
+  const updateVoicePreferences = (next: VoicePreferences) => {
+    setVoicePreferences(next)
+    saveVoicePreferences(next)
+  }
+
   const startPractice = (chosenSettings = settings) => {
     if (buildExercisePool(chosenSettings).length === 0) {
       setSetupError(
@@ -58,6 +73,7 @@ export default function App() {
     saveSettings(chosenSettings)
     setSettings(chosenSettings)
     setSessionSettings({ ...chosenSettings })
+    setSessionVoicePreferences({ ...voicePreferences })
     setSetupError('')
     setSessionKey((current) => current + 1)
     setView('practice')
@@ -106,6 +122,7 @@ export default function App() {
       <PracticeScreen
         key={sessionKey}
         settings={sessionSettings}
+        voicePreferences={sessionVoicePreferences}
         onComplete={completeSession}
         onExit={() => setView('setup')}
       />
@@ -138,8 +155,10 @@ export default function App() {
       error={setupError}
       historyCount={sessions.length}
       settings={settings}
+      voicePreferences={voicePreferences}
       onProgress={() => setView('progress')}
       onSettingsChange={updateSettings}
+      onVoicePreferencesChange={updateVoicePreferences}
       onStart={() => startPractice()}
       onTutorial={() => {
         setTutorialReplay(true)

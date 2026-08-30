@@ -1,6 +1,6 @@
 # Number Bonds
 
-Number Bonds is a calm, child-friendly practice app for learning how two parts make a whole. It runs locally in a web browser, uses textbook-style circle diagrams, and keeps settings and recent session summaries only in that browser.
+Number Bonds is a calm, child-friendly practice app for learning how two parts make a whole. It runs locally in a web browser, uses textbook-style circle diagrams, and keeps settings and recent session summaries only in that browser. An optional teacher voice reads each question and gives gentle spoken feedback.
 
 ## Install on a Mac
 
@@ -47,6 +47,19 @@ npm run verify    # lint, tests, script checks, and build
 ```
 
 The app uses React, TypeScript, and Vite. It has no backend, external fonts, analytics, advertisements, or cloud storage. Browser data can be cleared from the app's progress screen.
+
+## Teacher voice
+
+Voice feedback is on by default. From the setup screen, an adult can:
+
+- turn narration on or off;
+- choose a Warm, Cheerful, or Calm delivery style;
+- select an English voice installed on the device; and
+- preview the voice before practice.
+
+During practice, **Hear the question again** repeats the current prompt. Spoken questions and feedback supplement the visible text and never block answering.
+
+Narration uses the browser's built-in Web Speech API. The app does not record the child or send question text to its own server. Installed voices generally work offline; a browser-default or enhanced voice may depend on the operating system and could require a voice download. If speech is unavailable or blocked, the complete visual practice flow still works.
 
 ## Troubleshooting
 
