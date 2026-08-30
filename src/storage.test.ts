@@ -2,7 +2,12 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS } from './domain/types';
-import type { PracticeSettings, SessionSummary } from './domain/types';
+import type {
+  MetricBucket,
+  PracticeSettings,
+  SessionBreakdown,
+  SessionSummary,
+} from './domain/types';
 import {
   MAX_SESSION_SUMMARIES,
   STORAGE_KEY,
@@ -25,8 +30,63 @@ const CUSTOM_SETTINGS: PracticeSettings = {
   exerciseMode: 'missing-part',
   zeroPolicy: 'exclude',
   sessionLength: 20,
+  sessionDurationMinutes: null,
+  adaptive: false,
   orientation: 'whole-bottom',
 };
+
+function bucket(overrides: Partial<MetricBucket> = {}): MetricBucket {
+  return {
+    attempted: 0,
+    solved: 0,
+    firstTryCorrect: 0,
+    hintsUsed: 0,
+    reveals: 0,
+    totalAttempts: 0,
+    totalResponseMs: 0,
+    ...overrides,
+  };
+}
+
+function breakdown(): SessionBreakdown {
+  return {
+    byRange: {
+      '1-5': bucket({
+        attempted: 4,
+        solved: 4,
+        firstTryCorrect: 3,
+        hintsUsed: 1,
+        totalAttempts: 5,
+        totalResponseMs: 12_000,
+      }),
+      '6-10': bucket({
+        attempted: 6,
+        solved: 6,
+        firstTryCorrect: 5,
+        totalAttempts: 7,
+        totalResponseMs: 20_000,
+      }),
+      '11-20': bucket(),
+    },
+    byType: {
+      'missing-whole': bucket({
+        attempted: 5,
+        solved: 5,
+        firstTryCorrect: 4,
+        hintsUsed: 1,
+        totalAttempts: 6,
+        totalResponseMs: 15_000,
+      }),
+      'missing-part': bucket({
+        attempted: 5,
+        solved: 5,
+        firstTryCorrect: 4,
+        totalAttempts: 6,
+        totalResponseMs: 17_000,
+      }),
+    },
+  };
+}
 
 function summary(
   day: number,
@@ -37,7 +97,26 @@ function summary(
     settings: { ...CUSTOM_SETTINGS },
     questionsCompleted: 10,
     firstAttemptCorrect: 8,
+    points: 96,
+    maxStreak: 5,
+    durationSeconds: 185,
+    highestWhole: 10,
+    adaptiveLevelUps: 2,
+    endReason: 'questions',
+    breakdown: breakdown(),
     ...overrides,
+  };
+}
+
+function legacySettings(): Record<string, unknown> {
+  return {
+    preset: CUSTOM_SETTINGS.preset,
+    minWhole: CUSTOM_SETTINGS.minWhole,
+    maxWhole: CUSTOM_SETTINGS.maxWhole,
+    exerciseMode: CUSTOM_SETTINGS.exerciseMode,
+    zeroPolicy: CUSTOM_SETTINGS.zeroPolicy,
+    sessionLength: CUSTOM_SETTINGS.sessionLength,
+    orientation: CUSTOM_SETTINGS.orientation,
   };
 }
 
@@ -61,7 +140,7 @@ describe('storage', () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it('round-trips settings and tutorial completion in one versioned record', () => {
+  it('round-trips current settings and tutorial completion', () => {
     saveSettings(CUSTOM_SETTINGS);
     setTutorialCompleted();
 
@@ -79,6 +158,24 @@ describe('storage', () => {
 
     setTutorialCompleted(false);
     expect(loadTutorialCompleted()).toBe(false);
+  });
+
+  it('round-trips timed and unlimited endless-session settings', () => {
+    const timed: PracticeSettings = {
+      ...CUSTOM_SETTINGS,
+      sessionLength: 'endless',
+      sessionDurationMinutes: 5,
+      adaptive: true,
+    };
+    saveSettings(timed);
+    expect(loadSettings()).toEqual(timed);
+
+    const unlimited: PracticeSettings = {
+      ...timed,
+      sessionDurationMinutes: null,
+    };
+    saveSettings(unlimited);
+    expect(loadSettings()).toEqual(unlimited);
   });
 
   it('keeps only the 10 latest session summaries, newest first', () => {
@@ -128,7 +225,99 @@ describe('storage', () => {
     expect(loadAppState()).toEqual(cleared);
   });
 
-  it('falls back safely for malformed JSON and outdated versions', () => {
+  it('migrates version-one settings and summaries in place', () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        settings: legacySettings(),
+        tutorialCompleted: true,
+        sessions: [
+          {
+            timestamp: summary(3).timestamp,
+            settings: legacySettings(),
+            questionsCompleted: 10,
+            firstAttemptCorrect: 8,
+          },
+        ],
+      }),
+    );
+
+    const migrated = loadAppState();
+    expect(migrated.settings).toEqual({
+      ...CUSTOM_SETTINGS,
+      adaptive: true,
+      sessionDurationMinutes: null,
+    });
+    expect(migrated.tutorialCompleted).toBe(true);
+    expect(migrated.sessions).toEqual([
+      {
+        timestamp: summary(3).timestamp,
+        settings: {
+          ...CUSTOM_SETTINGS,
+          adaptive: true,
+          sessionDurationMinutes: null,
+        },
+        questionsCompleted: 10,
+        firstAttemptCorrect: 8,
+        points: 0,
+        maxStreak: 0,
+        durationSeconds: 0,
+        highestWhole: 0,
+        adaptiveLevelUps: 0,
+        endReason: 'questions',
+        breakdown: {
+          byRange: {
+            '1-5': bucket(),
+            '6-10': bucket(),
+            '11-20': bucket(),
+          },
+          byType: {
+            'missing-whole': bucket(),
+            'missing-part': bucket(),
+          },
+        },
+      },
+    ]);
+
+    const storedAgain = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
+      version: number;
+    };
+    expect(storedAgain.version).toBe(STORAGE_VERSION);
+  });
+
+  it('salvages compatible version-one fields while dropping corrupt sessions', () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        settings: legacySettings(),
+        tutorialCompleted: 'yes',
+        sessions: [
+          {
+            timestamp: summary(2).timestamp,
+            settings: legacySettings(),
+            questionsCompleted: 4,
+            firstAttemptCorrect: 5,
+          },
+          {
+            timestamp: summary(1).timestamp,
+            settings: legacySettings(),
+            questionsCompleted: 4,
+            firstAttemptCorrect: 3,
+          },
+        ],
+      }),
+    );
+
+    const migrated = loadAppState();
+    expect(migrated.settings.adaptive).toBe(true);
+    expect(migrated.tutorialCompleted).toBe(false);
+    expect(migrated.sessions).toHaveLength(1);
+    expect(migrated.sessions[0]?.firstAttemptCorrect).toBe(3);
+  });
+
+  it('falls back safely for malformed JSON and unknown versions', () => {
     localStorage.setItem(STORAGE_KEY, '{not json');
     expect(loadAppState()).toEqual({
       settings: DEFAULT_SETTINGS,
@@ -164,7 +353,17 @@ describe('storage', () => {
           validSummary,
           { ...summary(3), firstAttemptCorrect: 11 },
           { ...summary(2), timestamp: 'not-a-date' },
-          { ...summary(1), settings: { ...CUSTOM_SETTINGS, maxWhole: 2 } },
+          { ...summary(1), points: -1 },
+          {
+            ...summary(5),
+            breakdown: {
+              ...breakdown(),
+              byRange: {
+                ...breakdown().byRange,
+                '1-5': bucket({ attempted: 2, solved: 3, totalAttempts: 3 }),
+              },
+            },
+          },
         ],
       }),
     );
@@ -174,6 +373,34 @@ describe('storage', () => {
       tutorialCompleted: false,
       sessions: [validSummary],
     });
+  });
+
+  it('drops summaries whose range, type, and completion totals disagree', () => {
+    const inconsistent = summary(7);
+    inconsistent.breakdown.byType['missing-part'].attempted += 1;
+    inconsistent.breakdown.byType['missing-part'].totalAttempts += 1;
+
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: STORAGE_VERSION,
+        settings: CUSTOM_SETTINGS,
+        tutorialCompleted: true,
+        sessions: [inconsistent],
+      }),
+    );
+
+    expect(loadSessionSummaries()).toEqual([]);
+  });
+
+  it('rejects a countdown on a finite question session', () => {
+    saveSettings(CUSTOM_SETTINGS);
+    saveSettings({
+      ...CUSTOM_SETTINGS,
+      sessionDurationMinutes: 5,
+    } as PracticeSettings);
+
+    expect(loadSettings()).toEqual(CUSTOM_SETTINGS);
   });
 
   it('does not persist extra profile or individual-answer fields', () => {
@@ -193,15 +420,19 @@ describe('storage', () => {
 
     const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
       settings: Record<string, unknown>;
-      sessions: Array<Record<string, unknown> & { settings: Record<string, unknown> }>;
+      sessions: Array<
+        Record<string, unknown> & { settings: Record<string, unknown> }
+      >;
     };
     expect(Object.keys(persisted.settings).sort()).toEqual(
       [
+        'adaptive',
         'exerciseMode',
         'maxWhole',
         'minWhole',
         'orientation',
         'preset',
+        'sessionDurationMinutes',
         'sessionLength',
         'zeroPolicy',
       ].sort(),
@@ -210,13 +441,30 @@ describe('storage', () => {
     const persistedSummary = persisted.sessions[0]!;
     expect(Object.keys(persistedSummary).sort()).toEqual(
       [
+        'adaptiveLevelUps',
+        'breakdown',
+        'durationSeconds',
+        'endReason',
         'firstAttemptCorrect',
+        'highestWhole',
+        'maxStreak',
+        'points',
         'questionsCompleted',
         'settings',
         'timestamp',
       ].sort(),
     );
     expect(persistedSummary.settings).not.toHaveProperty('childName');
+    expect(persistedSummary).not.toHaveProperty('answers');
+  });
+
+  it('returns deep-independent breakdown data', () => {
+    addSessionSummary(summary(1));
+    const first = loadAppState();
+    const second = loadAppState();
+
+    first.sessions[0]!.breakdown.byRange['1-5'].attempted = 999;
+    expect(second.sessions[0]!.breakdown.byRange['1-5'].attempted).toBe(4);
   });
 
   it('repairs corrupt storage on the next valid write', () => {

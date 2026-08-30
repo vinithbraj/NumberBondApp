@@ -3,6 +3,7 @@ import type {
   ExerciseMode,
   PracticeSettings,
   PresetId,
+  SessionDurationMinutes,
   SessionLength,
 } from '../domain/types'
 import { MAX_WHOLE, MIN_WHOLE, PRESET_SETTINGS } from '../domain/types'
@@ -48,11 +49,20 @@ const PRESET_DETAILS: Array<{
   },
 ]
 
-const SESSION_LENGTHS: Array<{ value: SessionLength; label: string }> = [
-  { value: 5, label: '5' },
-  { value: 10, label: '10' },
-  { value: 20, label: '20' },
-  { value: 'endless', label: 'Endless' },
+const QUESTION_COUNTS: Array<{ value: Exclude<SessionLength, 'endless'>; label: string }> = [
+  { value: 5, label: '5 questions' },
+  { value: 10, label: '10 questions' },
+  { value: 20, label: '20 questions' },
+]
+
+const SESSION_DURATIONS: Array<{
+  value: SessionDurationMinutes
+  label: string
+}> = [
+  { value: 3, label: '3 min' },
+  { value: 5, label: '5 min' },
+  { value: 10, label: '10 min' },
+  { value: 15, label: '15 min' },
 ]
 
 const NUMBER_OPTIONS = Array.from(
@@ -67,6 +77,8 @@ function settingWithPreset(
   return {
     ...PRESET_SETTINGS[preset],
     sessionLength: current.sessionLength,
+    sessionDurationMinutes: current.sessionDurationMinutes,
+    adaptive: current.adaptive,
     orientation: current.orientation,
   }
 }
@@ -85,6 +97,13 @@ export function SetupScreen({
   const update = (patch: Partial<PracticeSettings>) =>
     onSettingsChange({ ...settings, ...patch })
 
+  const sessionMode =
+    settings.sessionLength !== 'endless'
+      ? 'questions'
+      : settings.sessionDurationMinutes === null
+        ? 'unlimited'
+        : 'timed'
+
   const openCustom = () => update({ preset: 'custom' })
 
   return (
@@ -92,7 +111,7 @@ export function SetupScreen({
       <AppHeader
         action={
           <button className="button button--small" type="button" onClick={onProgress}>
-            Progress{historyCount > 0 ? ` (${historyCount})` : ''}
+            Parent report{historyCount > 0 ? ` (${historyCount})` : ''}
           </button>
         }
       />
@@ -243,21 +262,111 @@ export function SetupScreen({
           <div className="settings-row">
             <div>
               <p className="eyebrow">Practice session</p>
-              <h2 id="session-heading">How many questions?</h2>
+              <h2 id="session-heading">Choose a stopping point</h2>
             </div>
-            <div className="choice-group" aria-label="Session length">
-              {SESSION_LENGTHS.map((option) => (
+            <div className="choice-group" aria-label="Session style">
+              {(
+                [
+                  ['questions', 'Questions'],
+                  ['timed', 'Timed'],
+                  ['unlimited', 'Unlimited'],
+                ] as const
+              ).map(([value, label]) => (
                 <button
-                  aria-pressed={settings.sessionLength === option.value}
+                  aria-pressed={sessionMode === value}
                   className="choice-button"
-                  key={option.label}
+                  key={value}
                   type="button"
-                  onClick={() => update({ sessionLength: option.value })}
+                  onClick={() => {
+                    if (value === 'questions') {
+                      update({ sessionLength: 10, sessionDurationMinutes: null })
+                    } else if (value === 'timed') {
+                      update({ sessionLength: 'endless', sessionDurationMinutes: 5 })
+                    } else {
+                      update({ sessionLength: 'endless', sessionDurationMinutes: null })
+                    }
+                  }}
                 >
-                  {option.label}
+                  {label}
                 </button>
               ))}
             </div>
+          </div>
+          {sessionMode === 'questions' && (
+            <div className="settings-row settings-row--subchoice">
+              <p className="settings-description">
+                The session ends after this many number bonds.
+              </p>
+              <div className="choice-group" aria-label="Number of questions">
+                {QUESTION_COUNTS.map((option) => (
+                  <button
+                    aria-pressed={settings.sessionLength === option.value}
+                    className="choice-button choice-button--soft"
+                    key={option.value}
+                    type="button"
+                    onClick={() =>
+                      update({
+                        sessionLength: option.value,
+                        sessionDurationMinutes: null,
+                      })
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {sessionMode === 'timed' && (
+            <div className="settings-row settings-row--subchoice">
+              <p className="settings-description">
+                A quiet countdown ends practice automatically. There is no speed bonus.
+              </p>
+              <div className="choice-group" aria-label="Practice time">
+                {SESSION_DURATIONS.map((option) => (
+                  <button
+                    aria-pressed={settings.sessionDurationMinutes === option.value}
+                    className="choice-button choice-button--soft"
+                    key={option.value}
+                    type="button"
+                    onClick={() =>
+                      update({
+                        sessionLength: 'endless',
+                        sessionDurationMinutes: option.value,
+                      })
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {sessionMode === 'unlimited' && (
+            <p className="session-note">
+              Practice keeps going until an adult or child chooses End session. An elapsed clock is shown.
+            </p>
+          )}
+          <div className="settings-row settings-row--bordered">
+            <div>
+              <p className="eyebrow">Learning pace</p>
+              <h2>Let questions grow with the child?</h2>
+              <p className="settings-description">
+                After three confident answers, larger wholes appear a little at a time. If help is needed, the app gently steps back.
+              </p>
+            </div>
+            <label className="toggle-field adaptive-toggle">
+              <input
+                checked={settings.adaptive}
+                type="checkbox"
+                onChange={(event) => update({ adaptive: event.target.checked })}
+              />
+              <span className="toggle-field__control" aria-hidden="true" />
+              <span>
+                <strong>{settings.adaptive ? 'Adaptive on' : 'Adaptive off'}</strong>
+                <small>{settings.adaptive ? 'Gentle automatic pacing' : 'Use the full chosen range'}</small>
+              </span>
+            </label>
           </div>
           <div className="settings-row settings-row--bordered">
             <div>

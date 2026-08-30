@@ -1,14 +1,21 @@
-import { useEffect, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import {
-  correctAnswer,
-  exerciseKey,
-  generateExerciseQueue,
-  isCorrectAnswer,
-  isZeroBond,
-} from '../domain/exerciseGenerator'
+  createAdaptiveState,
+  recordAdaptiveOutcome,
+  selectNextAdaptiveExercise,
+  type AdaptiveState,
+} from '../domain/adaptive'
+import { correctAnswer, isCorrectAnswer } from '../domain/exerciseGenerator'
+import {
+  emptySessionBreakdown,
+  recordQuestionResult,
+} from '../domain/performance'
+import { scoreQuestion, type QuestionScore } from '../domain/scoring'
 import type {
   BondExercise,
   PracticeSettings,
+  SessionBreakdown,
+  SessionEndReason,
   SessionSummary,
 } from '../domain/types'
 import { useSpeechFeedback } from '../hooks/useSpeechFeedback'
@@ -35,21 +42,44 @@ interface PracticeScreenProps {
 }
 
 interface PracticeState {
-  queue: BondExercise[]
-  currentIndex: number
+  exercise: BondExercise | undefined
+  adaptiveState: AdaptiveState
+  questionNumber: number
+  questionStartedAt: number
   answer: string
   attempts: number
   phase: AnswerPhase
   completed: number
   firstAttemptCorrect: number
+  points: number
+  currentStreak: number
+  maxStreak: number
+  highestWhole: number
+  highestAdaptiveMax: number
+  adaptiveLevelUps: number
+  breakdown: SessionBreakdown
+  award: QuestionScore | null
+  levelUpMax: number | null
 }
 
 type PracticeAction =
   | { type: 'set-answer'; answer: string }
   | { type: 'wrong' }
-  | { type: 'correct'; answer: string }
-  | { type: 'reveal'; answer: string }
-  | { type: 'next'; queue: BondExercise[] }
+  | {
+      type: 'resolve'
+      answer: string
+      phase: Extract<AnswerPhase, 'correct' | 'revealed'>
+      award: QuestionScore
+      adaptiveState: AdaptiveState
+      breakdown: SessionBreakdown
+      levelUpMax: number | null
+    }
+  | {
+      type: 'next'
+      exercise: BondExercise | undefined
+      adaptiveState: AdaptiveState
+      startedAt: number
+    }
 
 function practiceReducer(
   state: PracticeState,
@@ -61,62 +91,73 @@ function practiceReducer(
       return { ...state, answer: action.answer }
     case 'wrong':
       return { ...state, attempts: state.attempts + 1 }
-    case 'correct':
+    case 'resolve':
       return {
         ...state,
         answer: action.answer,
-        phase: 'correct',
+        phase: action.phase,
         completed: state.completed + 1,
         firstAttemptCorrect:
-          state.firstAttemptCorrect + (state.attempts === 0 ? 1 : 0),
-      }
-    case 'reveal':
-      return {
-        ...state,
-        answer: action.answer,
-        phase: 'revealed',
-        completed: state.completed + 1,
+          state.firstAttemptCorrect +
+          (action.phase === 'correct' && state.attempts === 0 ? 1 : 0),
+        points: state.points + action.award.points,
+        currentStreak: action.award.newStreak,
+        maxStreak: Math.max(state.maxStreak, action.award.newStreak),
+        highestWhole: Math.max(
+          state.highestWhole,
+          state.exercise?.whole ?? 0,
+        ),
+        highestAdaptiveMax: Math.max(
+          state.highestAdaptiveMax,
+          action.adaptiveState.currentMax,
+        ),
+        adaptiveLevelUps:
+          state.adaptiveLevelUps + (action.levelUpMax === null ? 0 : 1),
+        adaptiveState: action.adaptiveState,
+        breakdown: action.breakdown,
+        award: action.award,
+        levelUpMax: action.levelUpMax,
       }
     case 'next':
       return {
         ...state,
-        queue: action.queue,
-        currentIndex: state.currentIndex + 1,
+        exercise: action.exercise,
+        adaptiveState: action.adaptiveState,
+        questionNumber: state.questionNumber + 1,
+        questionStartedAt: action.startedAt,
         answer: '',
         attempts: 0,
         phase: 'answering',
+        award: null,
+        levelUpMax: null,
       }
   }
 }
 
 function createInitialState(settings: PracticeSettings): PracticeState {
-  const count = settings.sessionLength === 'endless' ? 20 : settings.sessionLength
+  const adaptiveState = createAdaptiveState(settings)
+  const selection = selectNextAdaptiveExercise(settings, adaptiveState)
+
   return {
-    queue: generateExerciseQueue(settings, count),
-    currentIndex: 0,
+    exercise: selection.exercise,
+    adaptiveState: selection.state,
+    questionNumber: 0,
+    questionStartedAt: Date.now(),
     answer: '',
     attempts: 0,
     phase: 'answering',
     completed: 0,
     firstAttemptCorrect: 0,
+    points: 0,
+    currentStreak: 0,
+    maxStreak: 0,
+    highestWhole: 0,
+    highestAdaptiveMax: selection.state.currentMax,
+    adaptiveLevelUps: 0,
+    breakdown: emptySessionBreakdown(),
+    award: null,
+    levelUpMax: null,
   }
-}
-
-function ensureCompatibleBatch(
-  existing: BondExercise[],
-  batch: BondExercise[],
-): BondExercise[] {
-  const previous = existing.at(-1)
-  if (!previous || batch.length < 2) return batch
-
-  const compatibleIndex = batch.findIndex(
-    (exercise) =>
-      exerciseKey(exercise) !== exerciseKey(previous) &&
-      !(isZeroBond(previous) && isZeroBond(exercise)),
-  )
-
-  if (compatibleIndex <= 0) return batch
-  return [...batch.slice(compatibleIndex), ...batch.slice(0, compatibleIndex)]
 }
 
 function promptFor(exercise: BondExercise): string {
@@ -129,12 +170,16 @@ function promptFor(exercise: BondExercise): string {
 }
 
 function promptKind(exercise: BondExercise): string {
-  return exercise.missing === 'whole' ? 'Find the whole' : 'Find the missing part'
+  return exercise.missing === 'whole'
+    ? 'Find the whole'
+    : 'Find the missing part'
 }
 
 function feedbackFor(state: PracticeState): string {
   if (state.phase === 'correct') return 'You found it!'
-  if (state.phase === 'revealed') return 'Here is the answer. You can try a new one.'
+  if (state.phase === 'revealed') {
+    return 'Here is the answer. You can try a new one.'
+  }
   if (state.attempts === 1) return 'Almost! Take another look.'
   if (state.attempts === 2) return 'Let’s count it together.'
   if (state.attempts >= 3) return 'Keep going, or let me show you.'
@@ -143,9 +188,76 @@ function feedbackFor(state: PracticeState): string {
 
 function sentenceValues(exercise: BondExercise, answer: string) {
   return {
-    whole: exercise.missing === 'whole' ? answer || '?' : String(exercise.whole),
-    partA: exercise.missing === 'partA' ? answer || '?' : String(exercise.parts[0]),
-    partB: exercise.missing === 'partB' ? answer || '?' : String(exercise.parts[1]),
+    whole:
+      exercise.missing === 'whole' ? answer || '?' : String(exercise.whole),
+    partA:
+      exercise.missing === 'partA' ? answer || '?' : String(exercise.parts[0]),
+    partB:
+      exercise.missing === 'partB' ? answer || '?' : String(exercise.parts[1]),
+  }
+}
+
+function elapsedSecondsSince(startedAt: number): number {
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+}
+
+function formatClock(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds))
+  const minutes = Math.floor(safeSeconds / 60)
+  const seconds = safeSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function summaryFromState(
+  state: PracticeState,
+  settings: PracticeSettings,
+  endReason: SessionEndReason,
+  durationSeconds: number,
+): SessionSummary {
+  return {
+    timestamp: new Date().toISOString(),
+    settings: { ...settings },
+    questionsCompleted: state.completed,
+    firstAttemptCorrect: state.firstAttemptCorrect,
+    points: state.points,
+    maxStreak: state.maxStreak,
+    durationSeconds: Math.max(0, Math.floor(durationSeconds)),
+    highestWhole: state.highestWhole,
+    adaptiveLevelUps: state.adaptiveLevelUps,
+    endReason,
+    breakdown: state.breakdown,
+  }
+}
+
+function attemptedQuestionCount(state: PracticeState): number {
+  return (
+    state.breakdown.byType['missing-whole'].attempted +
+    state.breakdown.byType['missing-part'].attempted
+  )
+}
+
+function withUnfinishedAttempt(state: PracticeState): PracticeState {
+  if (
+    state.phase !== 'answering' ||
+    state.attempts === 0 ||
+    !state.exercise
+  ) {
+    return state
+  }
+
+  return {
+    ...state,
+    highestWhole: Math.max(state.highestWhole, state.exercise.whole),
+    breakdown: recordQuestionResult(state.breakdown, {
+      whole: state.exercise.whole,
+      missingPosition: state.exercise.missing,
+      attempts: state.attempts,
+      firstTry: false,
+      hintUsed: state.attempts >= 2,
+      revealed: false,
+      solved: false,
+      responseMs: Date.now() - state.questionStartedAt,
+    }),
   }
 }
 
@@ -162,20 +274,78 @@ export function PracticeScreen({
   )
   const inputRef = useRef<HTMLInputElement>(null)
   const nextButtonRef = useRef<HTMLButtonElement>(null)
-  const exercise = state.queue[state.currentIndex]
+  const sessionStartedAtRef = useRef(state.questionStartedAt)
+  const stateRef = useRef(state)
+  const sessionFinishedRef = useRef(false)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const exercise = state.exercise
   const { isSupported: voiceSupported, speak, stop } =
     useSpeechFeedback(voicePreferences)
+  const timedLimitSeconds =
+    settings.sessionLength === 'endless' &&
+    settings.sessionDurationMinutes !== null
+      ? settings.sessionDurationMinutes * 60
+      : null
+
+  const dispatchPractice = (action: PracticeAction) => {
+    stateRef.current = practiceReducer(stateRef.current, action)
+    dispatch(action)
+  }
+
+  const finishLatestSession = useCallback(
+    (endReason: SessionEndReason) => {
+      if (sessionFinishedRef.current) return
+      sessionFinishedRef.current = true
+      stop()
+      const latest = withUnfinishedAttempt(stateRef.current)
+      stateRef.current = latest
+      if (attemptedQuestionCount(latest) === 0) {
+        onExit()
+        return
+      }
+
+      const duration =
+        timedLimitSeconds !== null && endReason === 'timer'
+          ? timedLimitSeconds
+          : elapsedSecondsSince(sessionStartedAtRef.current)
+      onComplete(summaryFromState(latest, settings, endReason, duration))
+    },
+    [onComplete, onExit, settings, stop, timedLimitSeconds],
+  )
 
   useEffect(() => {
     if (state.phase === 'answering') inputRef.current?.focus()
     else nextButtonRef.current?.focus()
-  }, [state.currentIndex, state.phase])
+  }, [state.questionNumber, state.phase])
 
   useEffect(() => {
     if (!exercise) return undefined
-    speak(questionPromptFor(exercise, state.currentIndex))
+    speak(questionPromptFor(exercise, state.questionNumber))
     return stop
-  }, [exercise, speak, state.currentIndex, stop])
+  }, [exercise, speak, state.questionNumber, stop])
+
+  useEffect(() => {
+    const updateClock = () => {
+      const elapsed = elapsedSecondsSince(sessionStartedAtRef.current)
+      setElapsedSeconds(
+        timedLimitSeconds === null
+          ? elapsed
+          : Math.min(timedLimitSeconds, elapsed),
+      )
+
+      if (
+        timedLimitSeconds !== null &&
+        elapsed >= timedLimitSeconds &&
+        !sessionFinishedRef.current
+      ) {
+        finishLatestSession('timer')
+      }
+    }
+
+    updateClock()
+    const interval = window.setInterval(updateClock, 250)
+    return () => window.clearInterval(interval)
+  }, [finishLatestSession, timedLimitSeconds])
 
   if (!exercise) {
     return (
@@ -184,7 +354,11 @@ export function PracticeScreen({
         <main className="empty-card">
           <h1>These settings need one small change.</h1>
           <p>Include zero, or choose a range with a whole of 2 or more.</p>
-          <button className="button button--primary" type="button" onClick={onExit}>
+          <button
+            className="button button--primary"
+            type="button"
+            onClick={onExit}
+          >
             Back to settings
           </button>
         </main>
@@ -195,66 +369,122 @@ export function PracticeScreen({
   const sentence = sentenceValues(exercise, state.answer)
   const finiteLength =
     settings.sessionLength === 'endless' ? null : settings.sessionLength
-  const isLast = finiteLength !== null && state.currentIndex + 1 >= finiteLength
+  const isLast = finiteLength !== null && state.completed >= finiteLength
+  const displayedTime =
+    timedLimitSeconds === null
+      ? elapsedSeconds
+      : Math.max(0, timedLimitSeconds - elapsedSeconds)
 
-  const makeSummary = (): SessionSummary => ({
-    timestamp: new Date().toISOString(),
-    settings: { ...settings },
-    questionsCompleted: state.completed,
-    firstAttemptCorrect: state.firstAttemptCorrect,
-  })
+  const stopAtTimedBoundary = (): boolean => {
+    if (
+      timedLimitSeconds === null ||
+      elapsedSecondsSince(sessionStartedAtRef.current) < timedLimitSeconds
+    ) {
+      return false
+    }
+    finishLatestSession('timer')
+    return true
+  }
+
+  const resolveQuestion = (revealed: boolean) => {
+    if (state.phase !== 'answering' || stopAtTimedBoundary()) return
+    const attemptNumber = state.attempts + 1
+    const award = scoreQuestion(
+      { attemptNumber, revealed },
+      state.currentStreak,
+    )
+    const nextAdaptiveState = recordAdaptiveOutcome(
+      state.adaptiveState,
+      settings,
+      { attemptNumber, revealed },
+    )
+    const levelUpMax =
+      nextAdaptiveState.currentMax > state.highestAdaptiveMax
+        ? nextAdaptiveState.currentMax
+        : null
+    const breakdown = recordQuestionResult(state.breakdown, {
+      whole: exercise.whole,
+      missingPosition: exercise.missing,
+      attempts: revealed ? state.attempts : attemptNumber,
+      firstTry: !revealed && attemptNumber === 1,
+      hintUsed: state.attempts >= 2,
+      revealed,
+      responseMs: Date.now() - state.questionStartedAt,
+    })
+
+    dispatchPractice({
+      type: 'resolve',
+      answer: String(correctAnswer(exercise)),
+      phase: revealed ? 'revealed' : 'correct',
+      award,
+      adaptiveState: nextAdaptiveState,
+      breakdown,
+      levelUpMax,
+    })
+  }
 
   const submit = () => {
-    if (state.phase !== 'answering' || state.answer === '') return
+    if (
+      state.phase !== 'answering' ||
+      state.answer === '' ||
+      stopAtTimedBoundary()
+    ) {
+      return
+    }
     const numericAnswer = Number(state.answer)
     if (isCorrectAnswer(exercise, numericAnswer)) {
       speak(correctFeedbackFor(exercise))
-      dispatch({
-        type: 'correct',
-        answer: String(correctAnswer(exercise)),
-      })
+      resolveQuestion(false)
     } else {
       speak(incorrectFeedbackFor(state.attempts + 1))
-      dispatch({ type: 'wrong' })
+      dispatchPractice({ type: 'wrong' })
       inputRef.current?.focus()
     }
   }
 
   const enterDigit = (digit: string) => {
-    if (state.phase !== 'answering') return
+    if (state.phase !== 'answering' || stopAtTimedBoundary()) return
     const combined = `${state.answer}${digit}`.slice(0, 2)
-    const answer = combined.length > 1 ? combined.replace(/^0+/, '') || '0' : combined
-    dispatch({ type: 'set-answer', answer })
+    const answer =
+      combined.length > 1 ? combined.replace(/^0+/, '') || '0' : combined
+    dispatchPractice({ type: 'set-answer', answer })
     inputRef.current?.focus()
   }
 
   const goNext = () => {
-    if (state.phase === 'answering') return
-    stop()
+    if (state.phase === 'answering' || stopAtTimedBoundary()) return
     if (isLast) {
-      onComplete(makeSummary())
+      finishLatestSession('questions')
       return
     }
 
-    let queue = state.queue
-    if (
-      settings.sessionLength === 'endless' &&
-      state.currentIndex + 1 >= state.queue.length
-    ) {
-      const batch = ensureCompatibleBatch(
-        state.queue,
-        generateExerciseQueue(settings, 20),
-      )
-      queue = [...state.queue, ...batch]
-    }
-    dispatch({ type: 'next', queue })
+    stop()
+    const selection = selectNextAdaptiveExercise(
+      settings,
+      state.adaptiveState,
+      exercise,
+    )
+    dispatchPractice({
+      type: 'next',
+      exercise: selection.exercise,
+      adaptiveState: selection.state,
+      startedAt: Date.now(),
+    })
   }
 
   const endSession = () => {
     if (!window.confirm('End this practice session?')) return
-    stop()
-    if (state.completed > 0) onComplete(makeSummary())
-    else onExit()
+    if (stopAtTimedBoundary()) return
+    const latest = stateRef.current
+    const reachedQuestionGoal =
+      finiteLength !== null && latest.completed >= finiteLength
+    if (latest.completed > 0 || latest.attempts > 0) {
+      finishLatestSession(reachedQuestionGoal ? 'questions' : 'ended')
+    } else {
+      sessionFinishedRef.current = true
+      stop()
+      onExit()
+    }
   }
 
   return (
@@ -267,13 +497,53 @@ export function PracticeScreen({
           </button>
         }
       />
+      <div className="game-hud" aria-label="Practice status">
+        <div className="game-hud__score" aria-label={`${state.points} points`}>
+          <span aria-hidden="true">★</span>
+          <strong>{state.points}</strong>
+          <small>points</small>
+        </div>
+        <div
+          className={`game-hud__streak ${
+            state.currentStreak >= 2 ? 'game-hud__streak--active' : ''
+          }`}
+          aria-label={`${state.currentStreak} answer streak`}
+        >
+          <span aria-hidden="true">✦</span>
+          <strong>{state.currentStreak}</strong>
+          <small>streak</small>
+        </div>
+        <div
+          className="game-hud__range"
+          aria-label={`Current number range ${settings.minWhole} to ${state.adaptiveState.currentMax}`}
+        >
+          <strong>
+            {settings.minWhole}–{state.adaptiveState.currentMax}
+          </strong>
+          <small>{settings.adaptive ? 'growing range' : 'number range'}</small>
+        </div>
+        <div
+          className={`game-hud__timer ${
+            timedLimitSeconds !== null && displayedTime <= 30
+              ? 'game-hud__timer--ending'
+              : ''
+          }`}
+          role="timer"
+          aria-label={`${
+            timedLimitSeconds === null ? 'Elapsed time' : 'Time remaining'
+          } ${formatClock(displayedTime)}`}
+        >
+          <strong>{formatClock(displayedTime)}</strong>
+          <small>{timedLimitSeconds === null ? 'time' : 'left'}</small>
+        </div>
+      </div>
       <main className="practice-layout">
         <section className="practice-card" aria-labelledby="practice-prompt">
           <div className="practice-card__topline">
             <span className="question-progress">
               {finiteLength === null
-                ? `${state.completed} solved`
-                : `Question ${Math.min(state.currentIndex + 1, finiteLength)} of ${finiteLength}`}
+                ? `${state.completed} completed`
+                : `Question ${Math.min(state.questionNumber + 1, finiteLength)} of ${finiteLength}`}
             </span>
             {finiteLength !== null && (
               <div
@@ -284,7 +554,11 @@ export function PracticeScreen({
                 aria-valuemax={finiteLength}
                 aria-valuenow={state.completed}
               >
-                <span style={{ width: `${(state.completed / finiteLength) * 100}%` }} />
+                <span
+                  style={{
+                    width: `${(state.completed / finiteLength) * 100}%`,
+                  }}
+                />
               </div>
             )}
           </div>
@@ -296,7 +570,7 @@ export function PracticeScreen({
               className="listen-button"
               type="button"
               onClick={() =>
-                speak(questionPromptFor(exercise, state.currentIndex))
+                speak(questionPromptFor(exercise, state.questionNumber))
               }
             >
               <span aria-hidden="true">▶</span>
@@ -310,7 +584,9 @@ export function PracticeScreen({
             inputRef={inputRef}
             orientation={settings.orientation}
             phase={state.phase}
-            onAnswerChange={(answer) => dispatch({ type: 'set-answer', answer })}
+            onAnswerChange={(answer) =>
+              dispatchPractice({ type: 'set-answer', answer })
+            }
             onSubmit={submit}
           />
 
@@ -329,6 +605,26 @@ export function PracticeScreen({
           >
             {feedbackFor(state)}
           </p>
+          <p
+            className="sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {state.phase !== 'answering' && state.award
+              ? `You earned ${state.award.points} ${
+                  state.award.points === 1 ? 'point' : 'points'
+                }. ${
+                  state.award.newStreak > 0
+                    ? `Solved streak ${state.award.newStreak}.`
+                    : 'The solved streak can begin again on the next question.'
+                } ${
+                  state.levelUpMax === null
+                    ? ''
+                    : `New numbers unlocked up to ${state.levelUpMax}.`
+                }`
+              : ''}
+          </p>
 
           {state.attempts >= 2 && state.phase === 'answering' && (
             <DotHint exercise={exercise} />
@@ -340,10 +636,7 @@ export function PracticeScreen({
               type="button"
               onClick={() => {
                 speak(revealedAnswerFeedbackFor(exercise))
-                dispatch({
-                  type: 'reveal',
-                  answer: String(correctAnswer(exercise)),
-                })
+                resolveQuestion(true)
               }}
             >
               Show answer
@@ -357,7 +650,7 @@ export function PracticeScreen({
               canSubmit={state.answer !== ''}
               disabled={false}
               onBackspace={() => {
-                dispatch({
+                dispatchPractice({
                   type: 'set-answer',
                   answer: state.answer.slice(0, -1),
                 })
@@ -372,8 +665,22 @@ export function PracticeScreen({
                 {state.phase === 'correct' ? '✓' : '★'}
               </span>
               <strong>
-                {state.phase === 'correct' ? 'Nice thinking!' : `It is ${correctAnswer(exercise)}.`}
+                {state.phase === 'correct'
+                  ? state.award?.label ?? 'Nice thinking!'
+                  : `It is ${correctAnswer(exercise)}.`}
               </strong>
+              {state.award && (
+                <p className="point-award">
+                  +{state.award.points}{' '}
+                  {state.award.points === 1 ? 'point' : 'points'}
+                </p>
+              )}
+              {state.levelUpMax !== null && (
+                <p className="level-up-toast">
+                  <span aria-hidden="true">↑</span> New numbers unlocked—up to{' '}
+                  {state.levelUpMax}!
+                </p>
+              )}
               <button
                 ref={nextButtonRef}
                 className="button button--primary button--large"

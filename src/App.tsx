@@ -21,6 +21,13 @@ import {
 
 type AppView = 'tutorial' | 'setup' | 'practice' | 'summary' | 'progress'
 
+function questionsAttempted(summary: SessionSummary): number {
+  return (
+    summary.breakdown.byType['missing-whole'].attempted +
+    summary.breakdown.byType['missing-part'].attempted
+  )
+}
+
 export default function App() {
   const [initialState] = useState(loadAppState)
   const [initialVoicePreferences] = useState(loadVoicePreferences)
@@ -80,7 +87,7 @@ export default function App() {
   }
 
   const completeSession = (summary: SessionSummary) => {
-    if (summary.questionsCompleted === 0) {
+    if (summary.questionsCompleted === 0 && questionsAttempted(summary) === 0) {
       setView('setup')
       return
     }
