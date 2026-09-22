@@ -10,6 +10,20 @@ The practice experience includes:
 - counting hints and a show-answer path so a child cannot become stuck; and
 - an aggregate parent report with first-try and solve rates, answer time, hints, reveals, number-range and question-type breakdowns, recent trends, and suggested focus areas.
 
+## Hop & Count: skip counting
+
+Choose **Hop & Count** at the top of the opening lesson or number-bond setup screen. Children can count by any number from **1 through 10**, including 3, 5, and 10.
+
+- **Learn with Pip** introduces counting from zero with a frog, numbered lily pads, equal groups of dots, and a matching addition sentence. Tap each hop or choose **Count for me** for narrated, automatic counting.
+- **Let’s play** gives eight questions: four next-number patterns followed by four missing-number patterns. Large answer buttons, optional spoken prompts, retries, counting hints, and a show-answer path support beginning readers.
+- **No rush** shows elapsed time. **2 minutes** and **3 minutes** use a countdown; rounds finish when the timer expires or all eight questions are completed. Pause stops the clock. Switching to another tab automatically pauses the game until the child resumes.
+- Independent first-try answers earn 10 points, with 5 extra points on every third consecutive independent answer. Answers after help or a mistake earn 5 points; learning a shown answer earns 1. Points are never deducted and do not depend on speed. Stars celebrate 2, 5, and 8 practiced hops, including answers learned together.
+- Counting choices and the ten latest aggregate counting results stay in this browser. Open **For grown-ups** on the Hop & Count setup screen for first-try, solved, hints, shown answers, and points. **Clear counting results** resets this history separately from the number-bond report.
+
+Hop & Count uses the existing teacher-voice preferences, with a voice toggle on every counting screen. It works without speech support and respects reduced-motion preferences. All artwork is included in the app; no images, fonts, or sounds need to be downloaded during play.
+
+See [the design notes](docs/skip-counting.md) for the reviewed learning games and the teaching approach.
+
 ## Install on a Mac
 
 You need an Intel or Apple Silicon Mac running macOS 11 or newer. The first installation needs an internet connection; starting and using the app afterward does not. After cloning or syncing the repository, no separate backend, database, package manager, or global runtime is required.

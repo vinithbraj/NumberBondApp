@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { BondExercise, DiagramOrientation } from '../domain/types'
 import { AppHeader } from './AppHeader'
+import { ActivityNav } from './ActivityNav'
 import { NumberBondDiagram } from './NumberBondDiagram'
 
 interface TutorialScreenProps {
@@ -8,6 +9,7 @@ interface TutorialScreenProps {
   replay: boolean
   onComplete: () => void
   onExit: () => void
+  onCounting: () => void
 }
 
 const COMPLETE_BOND: BondExercise = {
@@ -45,6 +47,7 @@ export function TutorialScreen({
   replay,
   onComplete,
   onExit,
+  onCounting,
 }: TutorialScreenProps) {
   const [step, setStep] = useState(0)
   const content = STEPS[step] ?? STEPS[0]!
@@ -59,6 +62,7 @@ export function TutorialScreen({
           </button>
         }
       />
+      <ActivityNav active="bonds" onCounting={onCounting} />
       <main className="tutorial-card">
         <div className="step-dots" aria-label={`Step ${step + 1} of 3`}>
           {STEPS.map((_, index) => (

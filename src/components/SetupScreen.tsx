@@ -9,6 +9,7 @@ import type {
 import { MAX_WHOLE, MIN_WHOLE, PRESET_SETTINGS } from '../domain/types'
 import type { VoicePreferences } from '../voice'
 import { AppHeader } from './AppHeader'
+import { ActivityNav } from './ActivityNav'
 import { VoiceSettingsPanel } from './VoiceSettingsPanel'
 
 interface SetupScreenProps {
@@ -21,6 +22,7 @@ interface SetupScreenProps {
   onStart: () => void
   onTutorial: () => void
   onProgress: () => void
+  onCounting: () => void
 }
 
 const PRESET_DETAILS: Array<{
@@ -93,6 +95,7 @@ export function SetupScreen({
   onStart,
   onTutorial,
   onProgress,
+  onCounting,
 }: SetupScreenProps) {
   const update = (patch: Partial<PracticeSettings>) =>
     onSettingsChange({ ...settings, ...patch })
@@ -115,6 +118,7 @@ export function SetupScreen({
           </button>
         }
       />
+      <ActivityNav active="bonds" onCounting={onCounting} />
       <main className="setup-layout">
         <section className="setup-intro">
           <p className="eyebrow">Ready to grow your number sense?</p>

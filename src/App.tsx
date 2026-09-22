@@ -6,6 +6,7 @@ import { ProgressScreen } from './components/ProgressScreen'
 import { SetupScreen } from './components/SetupScreen'
 import { SummaryScreen } from './components/SummaryScreen'
 import { TutorialScreen } from './components/TutorialScreen'
+import { SkipCountingScreen } from './components/SkipCountingScreen'
 import {
   addSessionSummary,
   clearProgress,
@@ -19,7 +20,7 @@ import {
   saveVoicePreferences,
 } from './voice'
 
-type AppView = 'tutorial' | 'setup' | 'practice' | 'summary' | 'progress'
+type AppView = 'tutorial' | 'setup' | 'practice' | 'summary' | 'progress' | 'counting'
 
 function questionsAttempted(summary: SessionSummary): number {
   return (
@@ -109,12 +110,21 @@ export default function App() {
     setSessions(nextState.sessions)
   }
 
+  if (view === 'counting') {
+    return <SkipCountingScreen
+      voicePreferences={voicePreferences}
+      onVoicePreferencesChange={updateVoicePreferences}
+      onBack={() => setView('setup')}
+    />
+  }
+
   if (view === 'tutorial') {
     return (
       <TutorialScreen
         orientation={settings.orientation}
         replay={tutorialReplay}
         onComplete={finishTutorial}
+        onCounting={() => setView('counting')}
         onExit={() => {
           if (!tutorialReplay) setTutorialCompleted(true)
           setTutorialReplay(false)
@@ -167,6 +177,7 @@ export default function App() {
       onSettingsChange={updateSettings}
       onVoicePreferencesChange={updateVoicePreferences}
       onStart={() => startPractice()}
+      onCounting={() => setView('counting')}
       onTutorial={() => {
         setTutorialReplay(true)
         setView('tutorial')

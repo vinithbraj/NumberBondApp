@@ -70,6 +70,18 @@ describe('App flow', () => {
     expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument()
   })
 
+  it('opens Hop & Count from first-run onboarding and returns to number bonds', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: /Hop & Count/ }))
+    expect(screen.getByRole('heading', { name: 'Little hops. Big number fun.' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Count by 10' }))
+    await user.click(screen.getByRole('button', { name: 'Number bonds' }))
+    expect(screen.getByRole('heading', { name: 'Choose a practice level.' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Hop & Count/ }))
+    expect(screen.getByRole('button', { name: 'Count by 10' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
   it('supports custom settings and the alternate diagram orientation', async () => {
     setTutorialCompleted(true)
     const user = userEvent.setup()
